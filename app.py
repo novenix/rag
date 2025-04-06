@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import os
 from rag.document_processor import DocumentProcessor
 from rag.retriever import TFIDFRetriever
-from rag.generator import OpenAIGenerator
+from rag.generator import TogetherAIGenerator, get_generator
 
 app = Flask(__name__)
 
@@ -10,7 +10,8 @@ app = Flask(__name__)
 documents_dir = os.path.join(os.path.dirname(__file__), 'files')
 processor = DocumentProcessor(documents_dir)
 retriever = TFIDFRetriever()
-generator = OpenAIGenerator()
+#generator = TogetherAIGenerator()
+generator = get_generator(provider="together")
 
 # Initialize document processing and indexing at application startup
 # instead of using the deprecated before_first_request decorator
