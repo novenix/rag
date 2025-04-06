@@ -12,7 +12,8 @@
             "env": {
                 "FLASK_APP": "app.py",
                 "FLASK_DEBUG": "1",
-                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f"
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f",
+                "RETRIEVER_TYPE": "dense"
             },
             "args": [
                 "run",
