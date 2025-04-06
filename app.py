@@ -12,13 +12,12 @@ processor = DocumentProcessor(documents_dir)
 retriever = TFIDFRetriever()
 generator = OpenAIGenerator()
 
-# Load and index documents on startup
-@app.before_first_request
-def initialize_rag():
-    documents = processor.load_documents()
-    chunks = processor.chunk_documents()
-    retriever.index_documents(chunks)
-    app.logger.info(f"Indexed {len(chunks)} document chunks from {len(documents)} documents")
+# Initialize document processing and indexing at application startup
+# instead of using the deprecated before_first_request decorator
+documents = processor.load_documents()
+chunks = processor.chunk_documents()
+retriever.index_documents(chunks)
+print(f"Indexed {len(chunks)} document chunks from {len(documents)} documents")
 
 @app.route("/")
 def home():
