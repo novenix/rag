@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 import os
 from rag.document_processor import DocumentProcessor
-from rag.retriever import get_retriever
+from rag.retriever import get_retriever, TFIDFRetriever, DenseRetriever
 from rag.generator import get_generator
 
 app = Flask(__name__)
@@ -10,15 +10,39 @@ app = Flask(__name__)
 documents_dir = os.path.join(os.path.dirname(__file__), 'files')
 processor = DocumentProcessor(documents_dir)
 
-# Get retriever based on configuration (default is TFIDF for backward compatibility)
+# Get configuration from environment
 retriever_type = os.getenv('RETRIEVER_TYPE', 'tfidf')
-retriever = get_retriever(retriever_type)
+embedding_model = os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2')
+
+# Get retriever based on configuration
+retriever_kwargs = {}
+if retriever_type.lower() == 'dense':
+    retriever_kwargs = {
+        'model_name': embedding_model,
+        'vector_store_config': {'index_type': 'flat'}
+    }
+elif retriever_type.lower() == 'hybrid':
+    # Create individual retrievers
+    tfidf_retriever = TFIDFRetriever()
+    dense_retriever = DenseRetriever(
+        model_name=embedding_model
+    )
+    
+    # Configure hybrid with both retrievers
+    retriever_kwargs = {
+        'retrievers': {
+            'tfidf': tfidf_retriever,
+            'dense': dense_retriever
+        },
+        'weights': {'tfidf': 0.3, 'dense': 0.7}  # Giving more weight to dense retrieval
+    }
+
+retriever = get_retriever(retriever_type, **retriever_kwargs)
 
 # Get generator
 generator = get_generator(provider="together")
 
 # Initialize document processing and indexing at application startup
-# instead of using the deprecated before_first_request decorator
 documents = processor.load_documents()
 chunks = processor.chunk_documents()
 retriever.index_documents(chunks)

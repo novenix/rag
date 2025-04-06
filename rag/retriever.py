@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Union
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -84,20 +84,51 @@ class VectorStore(ABC):
 class FAISSVectorStore(VectorStore):
     """Vector store implementation using FAISS."""
     
-    def __init__(self, dimension: int):
+    def __init__(self, dimension: int, index_type: str = "flat"):
         """Initialize the FAISS vector store.
         
         Args:
             dimension: Dimension of the vectors to store
+            index_type: Type of FAISS index to use ('flat', 'ivf', 'hnsw')
         """
-        # Create a flat (brute-force) L2 index
-        self.index = faiss.IndexFlatL2(dimension)
+        import faiss
+        
+        # Select the appropriate index type
+        if index_type == "flat":
+            # Simple but exact flat index (L2 distance)
+            self.index = faiss.IndexFlatL2(dimension)
+        elif index_type == "ivf":
+            # IVF (Inverted File Index) for faster but approximate search
+            # Using 4*sqrt(n) centroids as a rule of thumb, but will use 100 to start
+            quantizer = faiss.IndexFlatL2(dimension)
+            self.index = faiss.IndexIVFFlat(quantizer, dimension, 100, faiss.METRIC_L2)
+            # IVF requires training before adding vectors
+            self.needs_training = True
+        elif index_type == "hnsw":
+            # HNSW (Hierarchical Navigable Small World) for efficient search
+            self.index = faiss.IndexHNSWFlat(dimension, 32)  # 32 neighbors
+        else:
+            raise ValueError(f"Unsupported index type: {index_type}")
+        
         self.document_chunks = []
+        self.needs_training = hasattr(self, 'needs_training') and self.needs_training
+        self.index_type = index_type
+        self.dimension = dimension
+        
+    def train(self, vectors: np.ndarray):
+        """Train the index if required (for IVF indexes)."""
+        if self.needs_training and not self.index.is_trained:
+            vectors = vectors.astype(np.float32)
+            self.index.train(vectors)
         
     def add_vectors(self, vectors: np.ndarray, document_chunks: List[Dict]):
         """Add vectors and their associated documents to the store."""
         # Make sure vectors are in float32 format
         vectors = vectors.astype(np.float32)
+        
+        # Train the index if needed
+        if self.needs_training:
+            self.train(vectors)
         
         # Add vectors to the index
         self.index.add(vectors)
@@ -126,19 +157,27 @@ class FAISSVectorStore(VectorStore):
 class DenseRetriever(Retriever):
     """Retriever that uses dense embeddings and a vector store."""
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", vector_store: VectorStore = None):
+    def __init__(self, 
+                 model_name: str = "all-MiniLM-L6-v2", 
+                 vector_store: Optional[VectorStore] = None,
+                 vector_store_config: Optional[Dict[str, Any]] = None):
         """Initialize the dense retriever with embedding model and vector store.
         
         Args:
             model_name: Name of the sentence-transformers model to use
             vector_store: Vector store to use (if None, will create a FAISS store)
+            vector_store_config: Configuration options for the FAISS vector store
         """
+        # Initialize the embedding model
         self.model = SentenceTransformer(model_name)
         self.document_chunks = []
+        self.model_name = model_name
         
-        # If no vector store is provided, create a FAISS store with the model's output dimension
+        # If no vector store is provided, create a FAISS vector store
         if vector_store is None:
-            self.vector_store = FAISSVectorStore(self.model.get_sentence_embedding_dimension())
+            dimension = self.model.get_sentence_embedding_dimension()
+            config = vector_store_config or {}
+            self.vector_store = FAISSVectorStore(dimension, **config)
         else:
             self.vector_store = vector_store
         
@@ -161,11 +200,82 @@ class DenseRetriever(Retriever):
         # Search the vector store
         return self.vector_store.search(query_embedding, top_k)
 
+class HybridRetriever(Retriever):
+    """A retriever that combines results from multiple retrievers."""
+    
+    def __init__(self, retrievers: Dict[str, Retriever], weights: Optional[Dict[str, float]] = None):
+        """Initialize with multiple retrievers.
+        
+        Args:
+            retrievers: Dictionary mapping retriever names to retriever instances
+            weights: Dictionary mapping retriever names to their weights (default: equal weights)
+        """
+        self.retrievers = retrievers
+        
+        # Set weights (default: equal weights for all retrievers)
+        if weights is None:
+            self.weights = {name: 1.0 / len(retrievers) for name in retrievers}
+        else:
+            # Normalize weights
+            total = sum(weights.values())
+            self.weights = {name: weight / total for name, weight in weights.items()}
+            
+            # Ensure all retrievers have weights
+            for name in retrievers:
+                if name not in self.weights:
+                    self.weights[name] = 0.0
+    
+    def index_documents(self, document_chunks: List[Dict]):
+        """Index documents in all retrievers."""
+        for retriever in self.retrievers.values():
+            retriever.index_documents(document_chunks)
+    
+    def retrieve(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve documents using all retrievers and merge results."""
+        # Get results from each retriever
+        all_results = {}
+        for name, retriever in self.retrievers.items():
+            results = retriever.retrieve(query, top_k=top_k * 2)  # Get more results to have enough for merging
+            
+            # Add to all_results, keyed by document ID (using text as ID for simplicity)
+            for result in results:
+                doc_id = result.get("metadata", {}).get("source", "") + "::" + result["text"][:100]
+                if doc_id not in all_results:
+                    all_results[doc_id] = {
+                        "text": result["text"],
+                        "metadata": result["metadata"],
+                        "scores": {}
+                    }
+                
+                # Store score from this retriever
+                all_results[doc_id]["scores"][name] = result["score"]
+        
+        # Calculate weighted scores
+        for doc_id, result in all_results.items():
+            weighted_score = 0.0
+            for name, score in result["scores"].items():
+                weighted_score += score * self.weights.get(name, 0.0)
+            
+            result["score"] = weighted_score
+        
+        # Sort by weighted score and take top-k
+        sorted_results = sorted(
+            all_results.values(), 
+            key=lambda x: x["score"], 
+            reverse=True
+        )[:top_k]
+        
+        # Remove the individual scores
+        for result in sorted_results:
+            result.pop("scores", None)
+        
+        return sorted_results
+
 def get_retriever(retriever_type: str = "tfidf", **kwargs) -> Retriever:
     """Factory function to create a retriever.
     
     Args:
-        retriever_type: Type of retriever to create ('tfidf' or 'dense')
+        retriever_type: Type of retriever to create ('tfidf', 'dense', 'hybrid')
         **kwargs: Additional arguments to pass to the retriever constructor
     
     Returns:
@@ -174,6 +284,18 @@ def get_retriever(retriever_type: str = "tfidf", **kwargs) -> Retriever:
     if retriever_type.lower() == "tfidf":
         return TFIDFRetriever()
     elif retriever_type.lower() == "dense":
-        return DenseRetriever(**kwargs)
+        vector_store_config = kwargs.pop('vector_store_config', {})
+        return DenseRetriever(
+            vector_store_config=vector_store_config,
+            **kwargs
+        )
+    elif retriever_type.lower() == "hybrid":
+        # Hybrid requires specification of retrievers to combine
+        retrievers = kwargs.get('retrievers', {
+            'tfidf': TFIDFRetriever(),
+            'dense': DenseRetriever()
+        })
+        weights = kwargs.get('weights', None)
+        return HybridRetriever(retrievers, weights)
     else:
         raise ValueError(f"Unknown retriever type: {retriever_type}")
