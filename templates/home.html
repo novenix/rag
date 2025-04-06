@@ -1,5 +1,123 @@
-{% extends 'base.html' %}
-
-{% block content %}
-    <h1>{% block title %} Welcome to your Flask app! {% endblock %}</h1>
-{% endblock %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HistoriaCard RAG Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            margin-top: 30px;
+        }
+        #query-input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #submit-btn {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #response-container {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+        }
+        .documents-container {
+            margin-top: 20px;
+        }
+        .document {
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 5px;
+        }
+        .loading {
+            text-align: center;
+            margin: 20px 0;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>HistoriaCard RAG Demo</h1>
+    <p>Ask questions about HistoriaCard's products, services, and mission.</p>
+    
+    <div class="container">
+        <input type="text" id="query-input" placeholder="Enter your question...">
+        <button id="submit-btn">Submit</button>
+        
+        <div class="loading" id="loading">Processing your query...</div>
+        
+        <div id="response-container">
+            <h2>Response:</h2>
+            <div id="response-text"></div>
+            
+            <div class="documents-container">
+                <h3>Retrieved Documents:</h3>
+                <div id="documents-list"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('submit-btn').addEventListener('click', async () => {
+            const query = document.getElementById('query-input').value.trim();
+            if (!query) return;
+            
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('response-container').style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/rag/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query, top_k: 3 })
+                });
+                
+                const data = await response.json();
+                
+                // Display response
+                document.getElementById('response-text').innerText = data.response;
+                
+                // Display retrieved documents
+                const documentsContainer = document.getElementById('documents-list');
+                documentsContainer.innerHTML = '';
+                
+                data.retrieved_documents.forEach(doc => {
+                    const docElement = document.createElement('div');
+                    docElement.className = 'document';
+                    docElement.innerHTML = `
+                        <p><strong>Source:</strong> ${doc.metadata.source}</p>
+                        <p><strong>Score:</strong> ${doc.score.toFixed(4)}</p>
+                        <p>${doc.text.substring(0, 200)}...</p>
+                    `;
+                    documentsContainer.appendChild(docElement);
+                });
+                
+                // Show response container
+                document.getElementById('response-container').style.display = 'block';
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('response-text').innerText = 'An error occurred while processing your query.';
+                document.getElementById('response-container').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
