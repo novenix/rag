@@ -4,7 +4,9 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import faiss
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
+import torch
+from tqdm import tqdm
 
 class Retriever(ABC):
     """Abstract base class for document retrieval."""
@@ -160,18 +162,21 @@ class DenseRetriever(Retriever):
     def __init__(self, 
                  model_name: str = "all-MiniLM-L6-v2", 
                  vector_store: Optional[VectorStore] = None,
-                 vector_store_config: Optional[Dict[str, Any]] = None):
+                 vector_store_config: Optional[Dict[str, Any]] = None,
+                 batch_size: int = 32):
         """Initialize the dense retriever with embedding model and vector store.
         
         Args:
             model_name: Name of the sentence-transformers model to use
             vector_store: Vector store to use (if None, will create a FAISS store)
             vector_store_config: Configuration options for the FAISS vector store
+            batch_size: Batch size for encoding documents
         """
         # Initialize the embedding model
         self.model = SentenceTransformer(model_name)
         self.document_chunks = []
         self.model_name = model_name
+        self.batch_size = batch_size
         
         # If no vector store is provided, create a FAISS vector store
         if vector_store is None:
@@ -186,8 +191,19 @@ class DenseRetriever(Retriever):
         self.document_chunks = document_chunks
         texts = [chunk["text"] for chunk in document_chunks]
         
-        # Generate embeddings for all document chunks
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
+        # Generate embeddings for all document chunks using batches for efficiency
+        all_embeddings = []
+        for i in range(0, len(texts), self.batch_size):
+            batch_texts = texts[i:i + self.batch_size]
+            with torch.no_grad():
+                batch_embeddings = self.model.encode(batch_texts, convert_to_numpy=True)
+            all_embeddings.append(batch_embeddings)
+        
+        # Concatenate all batched embeddings
+        if len(all_embeddings) > 1:
+            embeddings = np.vstack(all_embeddings)
+        else:
+            embeddings = all_embeddings[0]
         
         # Add to vector store
         self.vector_store.add_vectors(embeddings, document_chunks)
@@ -271,11 +287,65 @@ class HybridRetriever(Retriever):
         
         return sorted_results
 
+class ReRankingRetriever(Retriever):
+    """A retriever that re-ranks the results from a base retriever using a cross-encoder model."""
+    
+    def __init__(self, 
+                 base_retriever: Retriever,
+                 cross_encoder_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                 initial_top_k: int = 10):
+        """Initialize with a base retriever and a cross-encoder model for re-ranking.
+        
+        Args:
+            base_retriever: The underlying retriever to get initial results from
+            cross_encoder_name: The name of the cross-encoder model to use for re-ranking
+            initial_top_k: How many documents to retrieve initially before re-ranking
+        """
+        self.base_retriever = base_retriever
+        self.cross_encoder = CrossEncoder(cross_encoder_name)
+        self.initial_top_k = initial_top_k
+        
+    def index_documents(self, document_chunks: List[Dict]):
+        """Pass indexing to the base retriever."""
+        self.base_retriever.index_documents(document_chunks)
+    
+    def retrieve(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve and re-rank documents for the query.
+        
+        Args:
+            query: The search query
+            top_k: Number of top results to return after re-ranking
+            
+        Returns:
+            List of re-ranked document chunks with scores
+        """
+        # Get initial results from base retriever (retrieve more than we need)
+        initial_k = max(self.initial_top_k, top_k * 2)
+        initial_results = self.base_retriever.retrieve(query, top_k=initial_k)
+        
+        if not initial_results:
+            return []
+        
+        # Prepare pairs for cross-encoder
+        pairs = [(query, doc["text"]) for doc in initial_results]
+        
+        # Score the pairs with cross-encoder
+        scores = self.cross_encoder.predict(pairs)
+        
+        # Sort results by cross-encoder scores
+        for i, score in enumerate(scores):
+            initial_results[i]["score"] = float(score)
+        
+        reranked_results = sorted(initial_results, key=lambda x: x["score"], reverse=True)
+        
+        # Return top_k results
+        return reranked_results[:top_k]
+
 def get_retriever(retriever_type: str = "tfidf", **kwargs) -> Retriever:
     """Factory function to create a retriever.
     
     Args:
-        retriever_type: Type of retriever to create ('tfidf', 'dense', 'hybrid')
+        retriever_type: Type of retriever to create ('tfidf', 'dense', 'hybrid', 'rerank')
         **kwargs: Additional arguments to pass to the retriever constructor
     
     Returns:
@@ -297,5 +367,14 @@ def get_retriever(retriever_type: str = "tfidf", **kwargs) -> Retriever:
         })
         weights = kwargs.get('weights', None)
         return HybridRetriever(retrievers, weights)
+    elif retriever_type.lower() == "rerank":
+        # Get the base retriever type
+        base_retriever_type = kwargs.pop('base_retriever_type', 'dense')
+        # Additional args for base retriever
+        base_retriever_kwargs = kwargs.pop('base_retriever_kwargs', {})
+        # Create base retriever
+        base_retriever = get_retriever(base_retriever_type, **base_retriever_kwargs)
+        # Create re-ranking retriever
+        return ReRankingRetriever(base_retriever, **kwargs)
     else:
         raise ValueError(f"Unknown retriever type: {retriever_type}")

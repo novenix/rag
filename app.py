@@ -13,14 +13,27 @@ processor = DocumentProcessor(documents_dir)
 # Get configuration from environment
 retriever_type = os.getenv('RETRIEVER_TYPE', 'tfidf')
 embedding_model = os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2')
+use_reranking = os.getenv('USE_RERANKING', 'false').lower() == 'true'
 
 # Get retriever based on configuration
 retriever_kwargs = {}
+print(f"Using use_reranking type: {use_reranking}")
 if retriever_type.lower() == 'dense':
     retriever_kwargs = {
         'model_name': embedding_model,
         'vector_store_config': {'index_type': 'flat'}
     }
+    # show in terminal the retriever type
+    print(f"Using dense retriever with embedding model: {embedding_model}")
+    if use_reranking:
+        retriever_type = 'rerank'
+        retriever_kwargs = {
+            'base_retriever_type': 'dense',
+            'base_retriever_kwargs': retriever_kwargs,
+            'cross_encoder_name': 'cross-encoder/ms-marco-MiniLM-L-6-v2',
+            'initial_top_k': 10
+        }
+        
 elif retriever_type.lower() == 'hybrid':
     # Create individual retrievers
     tfidf_retriever = TFIDFRetriever()
@@ -36,6 +49,15 @@ elif retriever_type.lower() == 'hybrid':
         },
         'weights': {'tfidf': 0.3, 'dense': 0.7}  # Giving more weight to dense retrieval
     }
+    
+    if use_reranking:
+        retriever_type = 'rerank'
+        retriever_kwargs = {
+            'base_retriever_type': 'hybrid',
+            'base_retriever_kwargs': retriever_kwargs,
+            'cross_encoder_name': 'cross-encoder/ms-marco-MiniLM-L-6-v2',
+            'initial_top_k': 10
+        }
 
 retriever = get_retriever(retriever_type, **retriever_kwargs)
 
