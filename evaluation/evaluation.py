@@ -30,25 +30,28 @@ class RAGEvaluator:
         with open(test_file, 'r') as f:
             return json.load(f)
     
-    def evaluate_retrieval(self, query, relevant_doc_ids, top_k=3):
+    def evaluate_retrieval(self, query, relevant_docs, top_k=3):
         """
         Evaluate the retrieval component using precision and recall.
         
         Args:
             query: Query string
-            relevant_doc_ids: List of relevant document IDs
+            relevant_docs: List of relevant document identifiers (source filename)
             top_k: Number of documents to retrieve
             
         Returns:
             Dict with precision and recall values
         """
         retrieved_docs = self.retriever.retrieve(query, top_k)
-        retrieved_ids = [doc['id'] for doc in retrieved_docs]
+        
+        # Extract document identifiers from retrieved documents
+        # Using source filename as the primary identifier
+        retrieved_sources = [doc.get('metadata', {}).get('source', '') for doc in retrieved_docs]
         
         # Calculate precision and recall
-        true_positives = len(set(retrieved_ids) & set(relevant_doc_ids))
-        precision = true_positives / len(retrieved_ids) if retrieved_ids else 0
-        recall = true_positives / len(relevant_doc_ids) if relevant_doc_ids else 0
+        true_positives = len(set(retrieved_sources) & set(relevant_docs))
+        precision = true_positives / len(retrieved_docs) if retrieved_docs else 0
+        recall = true_positives / len(relevant_docs) if relevant_docs else 0
         f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
         
         return {
@@ -70,12 +73,14 @@ class RAGEvaluator:
         Returns:
             Dict with generation metrics
         """
-        generated_response = self.generator.generate(query, retrieved_docs)
+        # Use generate_response instead of generate to match the generator interface
+        generated_response = self.generator.generate_response(query, retrieved_docs)
         
         # Calculate ROUGE scores
         try:
             rouge_scores = self.rouge.get_scores(generated_response, expected_response)[0]
-        except:
+        except Exception as e:
+            print(f"ROUGE calculation failed: {e}")
             # Fallback if ROUGE fails
             rouge_scores = {'rouge-1': {'f': 0}, 'rouge-2': {'f': 0}, 'rouge-l': {'f': 0}}
         
@@ -104,11 +109,11 @@ class RAGEvaluator:
         
         for test_case in test_queries:
             query = test_case['query']
-            relevant_doc_ids = test_case.get('relevant_doc_ids', [])
+            relevant_docs = test_case.get('relevant_docs', [])
             expected_response = test_case['expected_response']
             
             # Evaluate retrieval
-            retrieval_result = self.evaluate_retrieval(query, relevant_doc_ids)
+            retrieval_result = self.evaluate_retrieval(query, relevant_docs)
             
             # Evaluate generation
             generation_result = self.evaluate_generation(
@@ -164,5 +169,13 @@ class RAGEvaluator:
             print(f"\nQuery {i+1}: {result['query']}")
             print(f"  Retrieval: P={result['retrieval']['precision']:.2f}, " +
                   f"R={result['retrieval']['recall']:.2f}, F1={result['retrieval']['f1']:.2f}")
+            
+            # Display retrieved documents
+            print("  Retrieved documents:")
+            for j, doc in enumerate(result['retrieval']['retrieved_docs'][:3]):  # Show top 3
+                source = doc.get('metadata', {}).get('source', 'unknown')
+                score = doc.get('score', 0.0)
+                print(f"    {j+1}. {source} (score: {score:.2f})")
+            
             print(f"  Generation: ROUGE-L={result['generation']['rouge_l']:.2f}")
             print(f"  Response: {result['generation']['generated_response'][:100]}...")
