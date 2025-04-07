@@ -2,7 +2,7 @@ import os
 import json
 import requests
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import openai
 from dotenv import load_dotenv
 
@@ -13,21 +13,32 @@ class Generator(ABC):
     """Abstract base class for text generators."""
     
     @abstractmethod
-    def generate_response(self, query: str, context_docs: List[Dict[str, Any]]) -> str:
-        """Generate a response based on query and context documents."""
+    def generate_response(self, query: str, context_docs: List[Dict[str, Any]], 
+                          conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
+        """Generate a response based on query, context documents, and conversation history."""
         pass
     
     def format_context(self, context_docs: List[Dict[str, Any]]) -> str:
         """Combine context documents into a single string."""
         return "\n\n".join([doc["text"] for doc in context_docs])
     
-    def create_base_prompt(self, query: str, context: str) -> str:
-        """Create a base prompt template."""
+    def create_base_prompt(self, query: str, context: str, 
+                           conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
+        """Create a base prompt template including conversation history if available."""
+        history_text = ""
+        if conversation_history and len(conversation_history) > 0:
+            history_text = "\nPrevious conversation:\n"
+            for msg in conversation_history:
+                speaker = "User" if msg["role"] == "user" else "Assistant"
+                history_text += f"{speaker}: {msg['content']}\n"
+        
         return f"""
-        Answer the question based on the context provided. If you cannot answer based on the context, say "I don't have enough information to answer this question."
+        Answer the question based on the context provided and the previous conversation if available. 
+        If you cannot answer based on the context, say "I don't have enough information to answer this question."
         
         Context:
         {context}
+        {history_text}
         
         Question: {query}
         
@@ -48,20 +59,29 @@ class OpenAIGenerator(Generator):
         self.temperature = temperature
         self.max_tokens = max_tokens
         
-    def generate_response(self, query: str, context_docs: List[Dict[str, Any]]) -> str:
+    def generate_response(self, query: str, context_docs: List[Dict[str, Any]], 
+                          conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
         """
-        Generate a response using OpenAI based on the query and retrieved documents.
+        Generate a response using OpenAI based on the query, retrieved documents, and conversation history.
         """
         context = self.format_context(context_docs)
-        prompt = self.create_base_prompt(query, context)
+        prompt = self.create_base_prompt(query, context, conversation_history)
         
         try:
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant that provides accurate information about HistoriaCard, a Mexican fintech company, based only on the provided context."}
+            ]
+            
+            # Add conversation history if available
+            if conversation_history:
+                messages.extend(conversation_history)
+                
+            # Add the current prompt
+            messages.append({"role": "user", "content": prompt})
+            
             response = openai.ChatCompletion.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that provides accurate information about HistoriaCard, a Mexican fintech company, based only on the provided context."},
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature
             )
@@ -83,21 +103,28 @@ class TogetherAIGenerator(Generator):
         self.max_tokens = max_tokens
         self.api_url = "https://api.together.xyz/v1/chat/completions"
         
-    def generate_response(self, query: str, context_docs: List[Dict[str, Any]]) -> str:
+    def generate_response(self, query: str, context_docs: List[Dict[str, Any]], 
+                          conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
         """
-        Generate a response using Together.ai based on the query and retrieved documents.
+        Generate a response using Together.ai based on the query, retrieved documents, and conversation history.
         """
         context = self.format_context(context_docs)
-        prompt = self.create_base_prompt(query, context)
+        prompt = self.create_base_prompt(query, context, conversation_history)
         
         system_message = "You are a helpful assistant that provides accurate information about HistoriaCard, a Mexican fintech company, based only on the provided context."
         
+        messages = [{"role": "system", "content": system_message}]
+        
+        # Add conversation history if available
+        if conversation_history:
+            messages.extend(conversation_history)
+            
+        # Add the current prompt
+        messages.append({"role": "user", "content": prompt})
+        
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature
         }

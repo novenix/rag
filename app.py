@@ -1,14 +1,19 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 import os
 from rag.document_processor import DocumentProcessor
 from rag.retriever import get_retriever, TFIDFRetriever, DenseRetriever
 from rag.generator import get_generator
+from rag.dialog_state import DialogStateManager
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev_secret_key')  # Set a secret key for sessions
 
 # Initialize RAG components
 documents_dir = os.path.join(os.path.dirname(__file__), 'files')
 processor = DocumentProcessor(documents_dir)
+
+# Initialize the dialog state manager
+dialog_manager = DialogStateManager()
 
 # Get configuration from environment
 retriever_type = os.getenv('RETRIEVER_TYPE', 'tfidf')
@@ -87,19 +92,45 @@ def query_rag():
     
     query = data['query']
     top_k = data.get('top_k', 3)
+    session_id = data.get('session_id')
+    
+    # Create a new session if one doesn't exist
+    if not session_id:
+        session_id = dialog_manager.create_session()
+    
+    # Get conversation history
+    conversation_history = dialog_manager.format_history_for_llm(session_id, include_last_n_turns=3)
     
     # Retrieve relevant documents
     retrieved_docs = retriever.retrieve(query, top_k=top_k)
     
     # Generate response
-    response_text = generator.generate_response(query, retrieved_docs)
+    response_text = generator.generate_response(query, retrieved_docs, conversation_history)
     
-    # Return response
+    # Add to conversation history
+    dialog_manager.add_to_history(session_id, "user", query)
+    dialog_manager.add_to_history(session_id, "assistant", response_text)
+    
+    # Return response with session ID
     return jsonify({
         "query": query,
         "response": response_text,
-        "retrieved_documents": retrieved_docs
+        "retrieved_documents": retrieved_docs,
+        "session_id": session_id
     })
+
+# Add an endpoint to clear conversation history
+@app.route("/api/conversation/clear", methods=["POST"])
+def clear_conversation():
+    """API endpoint to clear conversation history."""
+    data = request.json
+    if not data or 'session_id' not in data:
+        return jsonify({"error": "Missing session_id parameter"}), 400
+    
+    session_id = data['session_id']
+    dialog_manager.clear_history(session_id)
+    
+    return jsonify({"status": "success", "message": "Conversation history cleared"})
 
 if __name__ == "__main__":
     app.run(debug=True)
