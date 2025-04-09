@@ -11,7 +11,10 @@
             "module": "flask",
             "env": {
                 "FLASK_APP": "app.py",
-                "FLASK_DEBUG": "1"
+                "FLASK_DEBUG": "1",
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f",
+                "RETRIEVER_TYPE": "tfidf",
+                "EMBEDDING_MODEL": "all-MiniLM-L6-v2"
             },
             "args": [
                 "run",
@@ -20,6 +23,99 @@
             "jinja": true,
             "justMyCode": true,
             "autoStartBrowser": true
+        },
+        {
+            "name": "Python Debugger: Flask",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_DEBUG": "1",
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f",
+                "RETRIEVER_TYPE": "dense",
+                "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+                "USE_RERANKING": "false"
+            },
+            "args": [
+                "run",
+                "--port=5000"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "autoStartBrowser": true
+        },
+        {
+            "name": "Python Debugger: Flask (Hybrid Retriever)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_DEBUG": "1",
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f",
+                "RETRIEVER_TYPE": "hybrid",
+                "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+                "USE_RERANKING": "false"
+            },
+            "args": [
+                "run",
+                "--port=5000"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "autoStartBrowser": true
+        },
+        {
+            "name": "Python Debugger: Flask (with ReRanking)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_DEBUG": "1",
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f",
+                "RETRIEVER_TYPE": "dense",
+                "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+                "USE_RERANKING": "true"
+            },
+            "args": [
+                "run",
+                "--port=5000"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "autoStartBrowser": true
+        },
+        {
+            "name": "Python Debugger: Evaluation (TFIDF)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "evaluation.run_evaluation",
+            "env": {
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f"
+            },
+            "args": [
+                "--retriever",
+                "tfidf"
+            ],
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Python Debugger: Evaluation (Dense)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "evaluation.run_evaluation",
+            "env": {
+                "TOGETHER_API_KEY":"0cd38d322033252c821bd72f6ca674e9dc7cdbcfb8d5962bca05539a656e3f8f"
+            },
+            "args": [
+                "--retriever",
+                "dense"
+            ],
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}"
         }
     ]
 }
